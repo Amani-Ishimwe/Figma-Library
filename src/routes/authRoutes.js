@@ -11,4 +11,7 @@ router.get('/profile', auth, function(req,res){
 }
 );
 
+router.post('/forgot-password', authController.requestPasswordReset)
+router.post('/reset-password', authController.resetPassword);
+
 module.exports = router;

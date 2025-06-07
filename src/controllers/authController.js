@@ -2,6 +2,7 @@ const db = require('../config/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto')
+const nodemailer = require('nodemailer');
 
 
 exports.register = (req,res)=>{
@@ -65,4 +66,56 @@ exports.logout = (req, res) => {
   res.status(200).json({ message: 'Logout successful' });
 }
 
-exports
+exports.requestPasswordReset = (req,res)=>{
+    const { email } = req.body;
+    db.query('SELECT * FROM users WHERE email = ?',[email], (error, results)=>{
+        if(error || results.length === 0){
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+        const tokenExpires = new Date(Date.now() + 3600000); // 1 hour from now
+
+        db.query('UPDATE users SET reset_token=?,reset_token_expires=? WHERE email=?',
+        [resetTokenHash, tokenExpires, email], (err, results) => {
+            (err2)=>{
+                if(err2) return res.status(500).json({ message: 'Internal server error' });
+            }
+        const resetUrl = `http://localhost:3000/reset-password/${resetToken}`;
+        console.log(`Password reset link: ${resetUrl}`);
+
+        // Optionally use nodemailer to email user
+        res.json({ message: 'Password reset link sent' });
+        }
+        )
+    })
+}
+
+exports.resetPassword = (req, res) => {
+  const { token } = req.params;
+  const { newPassword } = req.body;
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+  db.query(
+    'SELECT * FROM users WHERE reset_token = ? AND reset_token_expires > NOW()',
+    [tokenHash],
+    async (err, results) => {
+      if (err || results.length === 0)
+        return res.status(400).json({ message: 'Invalid or expired token' });
+
+      const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+      // Update password and clear token
+      db.query(
+        'UPDATE users SET password = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?',
+        [hashedPassword, results[0].id],
+        (err2) => {
+          if (err2) return res.status(500).json({ message: 'Error updating password' });
+          res.json({ message: 'Password reset successful' });
+        }
+      );
+    }
+  );
+};
