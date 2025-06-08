@@ -2,7 +2,8 @@ const db = require('../config/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto')
-const nodemailer = require('nodemailer');
+const transporter = require('./emailService')
+
 
 
 exports.register = (req,res)=>{
@@ -66,31 +67,77 @@ exports.logout = (req, res) => {
   res.status(200).json({ message: 'Logout successful' });
 }
 
-exports.requestPasswordReset = (req,res)=>{
-    const { email } = req.body;
-    db.query('SELECT * FROM users WHERE email = ?',[email], (error, results)=>{
-        if(error || results.length === 0){
-            return res.status(404).json({ message: 'User not found' });
-        }
+exports.requestPasswordReset = (req, res) => {
+  const { email } = req.body;
+  const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+  const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+  const tokenExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-        const resetToken = crypto.randomBytes(32).toString('hex');
-        const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-        const tokenExpires = new Date(Date.now() + 3600000); // 1 hour from now
+  db.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
+    if (err || results.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
-        db.query('UPDATE users SET reset_token=?,reset_token_expires=? WHERE email=?',
-        [resetTokenHash, tokenExpires, email], (err, results) => {
-            (err2)=>{
-                if(err2) return res.status(500).json({ message: 'Internal server error' });
-            }
-        const resetUrl = `http://localhost:3000/reset-password/${resetToken}`;
-        console.log(`Password reset link: ${resetUrl}`);
+    db.query(
+      'UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE email = ?',
+      [otpHash, tokenExpires, email],
+      (err2) => {
+        if (err2) return res.status(500).json({ message: 'Server error' });
 
-        // Optionally use nodemailer to email user
-        res.json({ message: 'Password reset link sent' });
-        }
-        )
-    })
-}
+        
+        transporter.sendMail({
+          to: email,
+          subject: 'Your OTP for Password Reset',
+          text: `Your OTP is: ${otp}. It expires in 10 minutes.`,
+        }, (mailErr) => {
+          if (mailErr)
+            console.error('Error sending email:', mailErr) 
+            return res.status(500).json({ message: 'Failed to send email' });
+
+          res.json({ message: 'OTP sent to email' });
+        });
+      }
+    );
+  });
+};
+
+exports.verifyOTP = (req, res) => {
+  const { email, otp } = req.body;
+  const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+
+  db.query(
+    'SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_token_expires > NOW()',
+    [email, otpHash],
+    (err, results) => {
+      if (err || results.length === 0) {
+        return res.status(400).json({ message: 'Invalid or expired OTP' });
+      }
+
+      res.json({ message: 'OTP verified' });
+    }
+  );
+};
+
+
+exports.resetPassword = async (req, res) => {
+  const { email, newPassword, confirmPassword } = req.body;
+
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ message: 'Passwords do not match' });
+  }
+
+  const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+  db.query(
+    'UPDATE users SET password = ?, reset_token = NULL, reset_token_expires = NULL WHERE email = ?',
+    [hashedPassword, email],
+    (err) => {
+      if (err) return res.status(500).json({ message: 'Error updating password' });
+
+      res.json({ message: 'Password reset successful' });
+    }
+  );
+};
 
 exports.resetPassword = (req, res) => {
   const { token } = req.params;
@@ -119,3 +166,4 @@ exports.resetPassword = (req, res) => {
     }
   );
 };
+
