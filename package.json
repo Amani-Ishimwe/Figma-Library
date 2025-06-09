@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@prisma/client": "^6.9.0",
     "bcrypt": "^6.0.0",
     "commander": "^13.1.0",
     "cors": "^2.8.5",
@@ -9,6 +10,7 @@
     "morgan": "^1.10.0",
     "mysql": "^2.18.1",
     "nodemailer": "^7.0.3",
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "prisma": "^6.9.0"
   }
 }

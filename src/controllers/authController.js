@@ -3,121 +3,116 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto')
 const transporter = require('./emailService')
+const prisma = require('../services/prismaClient')
 
 
 
-exports.register = (req,res)=>{
+exports.register = async (req,res)=>{
   const {first_name,last_name,contact_no,email,password,role ='user'} = req.body;
 
   const hashedPassword = bcrypt.hashSync(password, 10);
 
-  db.query(
-    'INSERT INTO users (first_name, last_name, contact_no, email, password,role) VALUES (?, ?, ?, ?, ?,?)',
-    [first_name, last_name, contact_no, email, hashedPassword,role],
-    (error, results) => {
-      if (error) {
-        console.error('Error inserting user:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+  try{
+    const user = await prisma.users.create({
+      data:{
+        first_name,
+        last_name,
+        contact_no,
+        email,
+        password: hashedPassword,
+        role
       }
-      res.status(201).json({ message: 'User registered successfully' });
-    }
-  );
-}
-  exports.login = (req , res) =>{
+    })
+    res.status(201).json(user)
+  }catch(error){
+    console.error('Error creating user:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+
+}    
+  exports.login = async (req , res) =>{
     const { email, password } = req.body;
+    try{
+      const user = await prisma.users.findUnique({
+        where: { email}
+      })
 
-    db.query(
-      'SELECT * FROM users WHERE email = ?',
-      [email],
-      (error, results) => {
-        if (error) {
-          console.error('Error fetching user:', error);
-          return res.status(500).json({ message: 'Internal server error' });
-        }
-
-        if (results.length === 0) {
-          return res.status(401).json({ message: 'Invalid email or password' });
-        }
-
-        const user = results[0];
-
-        const isPasswordValid = bcrypt.compareSync(password, user.password);
-        if (!isPasswordValid) {
-          return res.status(401).json({ message: 'Invalid email or password' });
-        }
-
-        const token = jwt.sign({ id: user.id, role:user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        res.status(200).json({
-          message: 'Login successful',
-          token,
-          user: {
-            id: user.id,
-            first_name: user.first_name,
-            last_name: user.last_name,
-            contact_no: user.contact_no,
-            email: user.email,
-            role: user.role
-          }
-        });
+      if (!user){
+        return res.status(404).json({ message: 'User not found' });
       }
-    );
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ message: 'Invalid password' });
+      }
+      const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+      res.status(200).json({ token, user: { id: user.id, email: user.email, role: user.role } });
+
+    }catch(error){
+      console.log(error)
+      return res.status(500).json({ message: 'Internal server error' });
+    }
   }
 exports.logout = (req, res) => {
   // Invalidate the token on the client side by removing it from storage
   res.status(200).json({ message: 'Logout successful' });
 }
 
-exports.requestPasswordReset = (req, res) => {
+exports.requestPasswordReset = async (req, res) => {
   const { email } = req.body;
   const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
   const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
-  const tokenExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  const tokenExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
 
-  db.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
-    if (err || results.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+  try {
+    const user = await prisma.users.findUnique({ where: { email } });
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
-    db.query(
-      'UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE email = ?',
-      [otpHash, tokenExpires, email],
-      (err2) => {
-        if (err2) return res.status(500).json({ message: 'Server error' });
+    await prisma.users.update({
+      where: { email },
+      data: {
+        reset_token: otpHash,
+        reset_token_expires: tokenExpires,
+      },
+    });
 
-        
-        transporter.sendMail({
-          to: email,
-          subject: 'Your OTP for Password Reset',
-          text: `Your OTP is: ${otp}. It expires in 10 minutes.`,
-        }, (mailErr) => {
-          if (mailErr)
-            console.error('Error sending email:', mailErr) 
-            return res.status(500).json({ message: 'Failed to send email' });
+    // Send OTP email
+    await transporter.sendMail({
+      to: email,
+      subject: 'Your OTP for Password Reset',
+      text: `Your OTP is: ${otp}. It expires in 10 minutes.`,
+    });
 
-          res.json({ message: 'OTP sent to email' });
-        });
-      }
-    );
-  });
+    res.json({ message: 'OTP sent to email' });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
 };
 
-exports.verifyOTP = (req, res) => {
+exports.verifyOTP = async (req, res) => {
   const { email, otp } = req.body;
   const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
 
-  db.query(
-    'SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_token_expires > NOW()',
-    [email, otpHash],
-    (err, results) => {
-      if (err || results.length === 0) {
-        return res.status(400).json({ message: 'Invalid or expired OTP' });
-      }
+  try {
+    const user = await prisma.users.findFirst({
+      where: {
+        email,
+        reset_token: otpHash,
+        reset_token_expires: {
+          gt: new Date(), // token expiry > now
+        },
+      },
+    });
 
-      res.json({ message: 'OTP verified' });
-    }
-  );
+    if (!user) return res.status(400).json({ message: 'Invalid or expired OTP' });
+
+    res.json({ message: 'OTP verified' });
+
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
 };
-
 
 exports.resetPassword = async (req, res) => {
   const { email, newPassword, confirmPassword } = req.body;
@@ -126,44 +121,21 @@ exports.resetPassword = async (req, res) => {
     return res.status(400).json({ message: 'Passwords do not match' });
   }
 
-  const hashedPassword = await bcrypt.hash(newPassword, 12);
+  try {
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
 
-  db.query(
-    'UPDATE users SET password = ?, reset_token = NULL, reset_token_expires = NULL WHERE email = ?',
-    [hashedPassword, email],
-    (err) => {
-      if (err) return res.status(500).json({ message: 'Error updating password' });
+    await prisma.users.update({
+      where: { email },
+      data: {
+        password: hashedPassword,
+        reset_token: null,
+        reset_token_expires: null,
+      },
+    });
 
-      res.json({ message: 'Password reset successful' });
-    }
-  );
+    res.json({ message: 'Password reset successful' });
+
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating password' });
+  }
 };
-
-exports.resetPassword = (req, res) => {
-  const { token } = req.params;
-  const { newPassword } = req.body;
-
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-
-  db.query(
-    'SELECT * FROM users WHERE reset_token = ? AND reset_token_expires > NOW()',
-    [tokenHash],
-    async (err, results) => {
-      if (err || results.length === 0)
-        return res.status(400).json({ message: 'Invalid or expired token' });
-
-      const hashedPassword = await bcrypt.hash(newPassword, 12);
-
-      // Update password and clear token
-      db.query(
-        'UPDATE users SET password = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?',
-        [hashedPassword, results[0].id],
-        (err2) => {
-          if (err2) return res.status(500).json({ message: 'Error updating password' });
-          res.json({ message: 'Password reset successful' });
-        }
-      );
-    }
-  );
-};
-
