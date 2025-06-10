@@ -2,7 +2,7 @@ const db = require('../config/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto')
-const transporter = require('./emailService')
+const transporter = require('')
 const prisma = require('../services/prismaClient')
 
 
@@ -19,8 +19,7 @@ exports.register = async (req,res)=>{
         last_name,
         contact_no,
         email,
-        password: hashedPassword,
-        role
+        password: hashedPassword
       }
     })
     res.status(201).json(user)
