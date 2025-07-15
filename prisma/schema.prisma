@@ -50,7 +50,7 @@ model roles {
 model user_roles {
   user_id Int
   role_id Int
-  users   users @relation(fields: [user_id], references: [ID], onDelete: Cascade, onUpdate: Restrict, map: "user_roles_ibfk_1")
+  users   users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "user_roles_ibfk_1")
   roles   roles @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "user_roles_ibfk_2")
 
   @@id([user_id, role_id])
